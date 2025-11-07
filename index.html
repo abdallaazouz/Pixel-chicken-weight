@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>نظام تقدير وزن الفراخ بالذكاء الصناعي</title>
+
+<!-- مكتبات الذكاء الصناعي -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0"></script>
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+<!-- تنسيق عام -->
+<style>
+body {
+  font-family: "Cairo", Tahoma, sans-serif;
+  background: linear-gradient(to bottom right, #f9f9f2, #e2f1e5);
+  color: #2f2f2f;
+  text-align: center;
+  direction: rtl;
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  background: #4a7a2f;
+  color: white;
+  padding: 15px 0;
+  font-size: 22px;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.2);
+}
+
+.container {
+  padding: 20px;
+  max-width: 700px;
+  margin: auto;
+}
+
+input, button {
+  margin: 8px;
+  padding: 10px 14px;
+  font-size: 17px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  outline: none;
+}
+
+input[type="file"] {
+  border: none;
+  background: none;
+}
+
+button {
+  background: #6ca33b;
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: 0.3s;
+}
+
+button:hover {
+  background: #4a7a2f;
+}
+
+#canvas {
+  width: 100%;
+  max-width: 100%;
+  border: 3px solid #4a7a2f;
+  border-radius: 15px;
+  margin-top: 15px;
+  box-shadow: 0 0 15px rgba(0,0,0,0.1);
+}
+
+#output {
+  background: #f1f9f3;
+  border-radius: 12px;
+  margin-top: 20px;
+  padding: 15px;
+  font-size: 18px;
+  color: #225a1a;
+  line-height: 1.8;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+footer {
+  background: #4a7a2f;
+  color: white;
+  padding: 15px;
+  margin-top: 30px;
+  font-size: 15px;
+}
+
+footer a {
+  color: #fff;
+  margin: 0 8px;
+  text-decoration: none;
+  font-weight: bold;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+</style>
+</head>
+<body>
+
+<header>🐔 نظام تقدير وزن وعدد الفراخ بالذكاء الصناعي</header>
+
+<div class="container">
+  <h3>📷 ارفع صورة الفراخ من الكاميرا أو المعرض</h3>
+  
+  <input type="file" id="imageInput" accept="image/*">
+  <br>
+  <label>📏 الارتفاع الحالي (سم): </label>
+  <input type="number" id="heightInput" value="100" min="20" max="300">
+  <br>
+  <button id="processBtn">🔍 تحليل الصورة</button>
+
+  <canvas id="canvas"></canvas>
+
+  <div id="output"></div>
+</div>
+
+<footer>
+  🧠 تصميم وبرمجة: <strong>م. عبد الله عزوز</strong>  
+  <br> 
+  💬 <a href="https://wa.me/201000000000" target="_blank">واتساب01119935714</a>
+</footer>
+
+<script>
+let net;
+const DEFAULT_HEIGHT = 100;
+const PIXEL_TO_WEIGHT = 0.00005;
+
+async function loadModel() {
+  net = await bodyPix.load();
+  console.log("✅ تم تحميل نموذج BodyPix بنجاح");
+}
+
+async function processImage() {
+  const file = document.getElementById('imageInput').files[0];
+  if (!file) return alert("📸 من فضلك اختر صورة أولاً");
+  
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+  img.onload = async () => {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    // تنفيذ الفصل الذكي
+    const segmentation = await net.segmentMultiPerson(img, {
+      internalResolution: 'medium',
+      segmentationThreshold: 0.6
+    });
+
+    const coloredPartImage = bodyPix.toMask(
+      segmentation, 
+      {r:0,g:0,b:0,a:0}, 
+      {r:255,g:255,b:255,a:255}, 
+      true
+    );
+
+    await bodyPix.drawMask(canvas, img, coloredPartImage, 0.7, 0);
+
+    // تحويل إلى OpenCV
+    let src = cv.imread(canvas);
+    let gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.threshold(gray, gray, 127, 255, cv.THRESH_BINARY);
+
+    // تنقية الصورة
+    let kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+    cv.morphologyEx(gray, gray, cv.MORPH_OPEN, kernel);
+    cv.morphologyEx(gray, gray, cv.MORPH_CLOSE, kernel);
+
+    // عد الأجسام
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(gray, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let totalPixels = 0;
+    let validCount = 0;
+
+    for (let i = 0; i < contours.size(); ++i) {
+      let area = cv.contourArea(contours.get(i));
+      if (area > 5000) {
+        totalPixels += area;
+        validCount++;
+        cv.drawContours(src, contours, i, [0, 255, 0, 255], 3);
+      }
+    }
+
+    const H = parseFloat(document.getElementById('heightInput').value);
+    const weight = totalPixels * PIXEL_TO_WEIGHT * Math.pow(H / DEFAULT_HEIGHT, 2);
+
+    document.getElementById('output').innerHTML = `
+      🐔 عدد الفراخ المكتشفة: <strong>${validCount}</strong><br>
+      ⚖️ الوزن الكلي التقريبي: <strong>${weight.toFixed(2)} كجم</strong><br>
+      📏 الارتفاع المستخدم: ${H} سم (المرجعي ${DEFAULT_HEIGHT} سم)
+    `;
+
+    cv.imshow('canvas', src);
+    src.delete(); gray.delete(); kernel.delete(); contours.delete(); hierarchy.delete();
+  };
+}
+
+loadModel();
+document.getElementById('processBtn').addEventListener('click', processImage);
+</script>
+
+</body>
+</html>
